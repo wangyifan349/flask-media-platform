@@ -248,7 +248,7 @@ flask-media-platform/
 ## 下载、安装与启动
 
 ```bash
-git clone https://github.com/你的用户名/flask-media-platform.git
+git clone https://github.com/wangyifan349/flask-media-platform.git
 cd flask-media-platform
 pip install -r requirements.txt
 python server_app.py
