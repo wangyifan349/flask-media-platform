@@ -1,0 +1,44 @@
+<div class="col" {% if management_mode|default(false) %}data-album-column="{{ album['id'] }}"{% endif %}>
+    <div class="card h-100 shadow-sm border-0{% if management_mode|default(false) %} album-management-card{% endif %}"
+         {% if management_mode|default(false) %}
+         data-album-id="{{ album['id'] }}"
+         data-album-title="{{ album['title'] }}"
+         data-open-url="{{ url_for('album_detail', album_id=album['id']) }}"
+         data-edit-url="{{ url_for('edit_album', album_id=album['id']) }}"
+         data-visibility-url="{{ url_for('change_album_visibility', album_id=album['id']) }}"
+         data-delete-url="{{ url_for('delete_album', album_id=album['id']) }}"
+         data-hidden="{{ 1 if album['is_hidden'] else 0 }}"
+         {% endif %}>
+        <div class="position-relative">
+            <a href="{{ url_for('album_detail', album_id=album['id']) }}" class="text-decoration-none">
+                {% if album['cover_image_id'] %}
+                    <img src="{{ url_for('media_file', media_id=album['cover_image_id']) }}" class="card-img-top album-cover" alt="{{ album['title'] }}">
+                {% else %}
+                    <div class="album-cover placeholder-cover d-flex align-items-center justify-content-center">暂无封面</div>
+                {% endif %}
+            </a>
+            {% if management_mode|default(false) %}
+                <div class="dropdown position-absolute top-0 end-0 m-2">
+                    <button class="btn btn-light btn-sm border shadow-sm album-menu-button" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="专辑操作">⋮</button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><a class="dropdown-item" href="{{ url_for('album_detail', album_id=album['id']) }}">打开专辑</a></li>
+                        <li><a class="dropdown-item" href="{{ url_for('edit_album', album_id=album['id']) }}">重命名</a></li>
+                        <li><button class="dropdown-item js-toggle-album-visibility" type="button">{{ '设为公开' if album['is_hidden'] else '设为隐藏' }}</button></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><button class="dropdown-item text-danger js-delete-album" type="button">删除专辑</button></li>
+                    </ul>
+                </div>
+            {% endif %}
+        </div>
+        <div class="card-body">
+            <div class="d-flex justify-content-between gap-2">
+                <h5 class="card-title text-truncate mb-1">{{ album['title'] }}</h5>
+                <span class="badge text-bg-secondary align-self-start album-hidden-badge{% if not album['is_hidden'] %} d-none{% endif %}">隐藏</span>
+            </div>
+            {% if album['display_name'] is defined %}
+                <a class="small text-secondary text-decoration-none" href="{{ url_for('user_profile', username=album['username']) }}">{{ album['display_name'] }} @{{ album['username'] }}</a>
+            {% endif %}
+            <p class="card-text text-secondary small mt-2 mb-0"><span class="media-count">{{ album['media_count'] }}</span> 个文件</p>
+        </div>
+    </div>
+</div>

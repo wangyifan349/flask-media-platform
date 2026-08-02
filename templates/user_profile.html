@@ -1,0 +1,20 @@
+{% extends 'base.html' %}
+{% block title %}{{ profile_user['display_name'] }} · MediaHub{% endblock %}
+{% block content %}
+<div class="page-toolbar">
+    <div class="page-toolbar-main">
+        <h1 class="h4 mb-0">{{ profile_user['display_name'] }}</h1>
+        <small>@{{ profile_user['username'] }}</small>
+    </div>
+    {% if is_owner %}<div class="page-toolbar-actions"><a class="btn btn-primary btn-sm" href="{{ url_for('create_album') }}">创建</a></div>{% endif %}
+</div>
+{% if albums %}
+    <div class="row row-cols-1 row-cols-sm-2 row-cols-lg-3 row-cols-xl-4 g-3">
+        {% for album in albums %}
+            {% include '_album_card.html' %}
+        {% endfor %}
+    </div>
+{% else %}
+    <div class="empty-state">暂无专辑</div>
+{% endif %}
+{% endblock %}

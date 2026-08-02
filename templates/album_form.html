@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% block title %}{{ '编辑专辑' if album else '创建专辑' }} · MediaHub{% endblock %}
+{% block content %}
+<div class="form-card mx-auto">
+    <h1 class="h4 mb-3">{{ '编辑专辑' if album else '创建专辑' }}</h1>
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="mb-3">
+            <label class="form-label" for="albumTitle">名称</label>
+            <input class="form-control" id="albumTitle" name="title" maxlength="100" required value="{{ request.form.get('title', album['title'] if album else '') }}">
+        </div>
+        <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" name="is_hidden" id="isHidden" {% if request.form.get('is_hidden') == 'on' or (not request.form and album and album['is_hidden']) %}checked{% endif %}>
+            <label class="form-check-label" for="isHidden">隐藏</label>
+        </div>
+        <div class="form-actions">
+            <button class="btn btn-primary" type="submit">保存</button>
+            <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">取消</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

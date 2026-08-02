@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>{% block title %}MediaHub{% endblock %}</title>
+    <style>
+{% include '_bootstrap_css.html' %}
+{% include '_app_css.html' %}
+{% block styles %}{% endblock %}
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg sticky-top app-navbar">
+    <div class="container-fluid app-container">
+        <a class="navbar-brand fw-bold" href="{{ url_for('index') }}">MediaHub</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNavbar" aria-controls="mainNavbar" aria-expanded="false" aria-label="导航">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="mainNavbar">
+            <form class="nav-search d-flex ms-lg-4 my-2 my-lg-0 flex-grow-1" action="{{ url_for('search') }}" method="get">
+                <input class="form-control me-2" type="search" name="q" value="{{ request.args.get('q', '') }}" placeholder="搜索用户" aria-label="搜索用户">
+                <button class="btn btn-outline-light" type="submit">搜索</button>
+            </form>
+            <ul class="navbar-nav ms-lg-3 align-items-lg-center">
+                {% if g.user %}
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">专辑</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('user_profile', username=g.user['username']) }}">主页</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('change_password') }}">密码</a></li>
+                    <li class="nav-item ms-lg-2">
+                        <form method="post" action="{{ url_for('logout') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button class="btn btn-outline-light btn-sm" type="submit">退出</button>
+                        </form>
+                    </li>
+                {% else %}
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('login') }}">登录</a></li>
+                    <li class="nav-item"><a class="btn btn-primary btn-sm ms-lg-2" href="{{ url_for('register') }}">注册</a></li>
+                {% endif %}
+            </ul>
+        </div>
+    </div>
+</nav>
+
+<main class="container-fluid app-container py-3 py-md-4">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="关闭"></button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+</main>
+
+<script>
+{% include '_bootstrap_js.html' %}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

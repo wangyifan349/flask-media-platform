@@ -1,0 +1,26 @@
+<div class="col" data-media-card="{{ item['id'] }}">
+    <div class="card h-100 border-0 shadow-sm overflow-hidden">
+        {% if item['media_type'] == 'image' %}
+            <a href="{{ url_for('media_file', media_id=item['id']) }}" target="_blank" rel="noopener">
+                <img class="media-preview" src="{{ url_for('media_file', media_id=item['id']) }}" alt="{{ item['original_name'] }}">
+            </a>
+        {% else %}
+            <video class="media-preview" controls preload="metadata">
+                <source src="{{ url_for('media_file', media_id=item['id']) }}">
+            </video>
+        {% endif %}
+        <div class="card-body d-flex justify-content-between align-items-center gap-2">
+            <span class="small text-truncate media-file-name" title="{{ item['original_name'] }}">{{ item['original_name'] }}</span>
+            {% if g.user and g.user['id'] == album['user_id'] %}
+                <div class="dropdown flex-shrink-0">
+                    <button class="btn btn-sm btn-light border" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="文件操作">⋮</button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><a class="dropdown-item" href="{{ url_for('media_file', media_id=item['id']) }}" target="_blank" rel="noopener">打开文件</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><button class="dropdown-item text-danger js-delete-media" type="button" data-delete-url="{{ url_for('delete_media', media_id=item['id']) }}" data-file-name="{{ item['original_name'] }}">删除</button></li>
+                    </ul>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>

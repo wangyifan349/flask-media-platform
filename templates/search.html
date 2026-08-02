@@ -1,0 +1,24 @@
+{% extends 'base.html' %}
+{% block title %}搜索用户 · MediaHub{% endblock %}
+{% block content %}
+<form class="mb-3" method="get">
+    <div class="input-group">
+        <input class="form-control" name="q" value="{{ query }}" placeholder="用户名或显示名称" autofocus>
+        <button class="btn btn-primary" type="submit">搜索</button>
+    </div>
+</form>
+{% if query %}
+    {% if users %}
+        <div class="list-group">
+            {% for user in users %}
+                <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" href="{{ url_for('user_profile', username=user['username']) }}">
+                    <span>{{ user['display_name'] }} <small>@{{ user['username'] }}</small></span>
+                    <span class="badge text-bg-light">{{ user['public_album_count'] }}</span>
+                </a>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="empty-state">无结果</div>
+    {% endif %}
+{% endif %}
+{% endblock %}

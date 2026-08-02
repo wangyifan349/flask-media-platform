@@ -1,0 +1,441 @@
+(() => {
+    'use strict';
+
+    const panel = document.getElementById('uploadPanel');
+    if (!panel) return;
+
+    const initUrl = panel.dataset.uploadInitUrl;
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    const maxFileBytes = Number(panel.dataset.maxFileBytes || 0);
+    const requestedChunkSize = 8 * 1024 * 1024;
+    const fileConcurrency = 2;
+    const maxChunkAttempts = 3;
+
+    const dropZone = document.getElementById('uploadDropZone');
+    const fileInput = document.getElementById('mediaFileInput');
+    const folderInput = document.getElementById('mediaFolderInput');
+    const chooseFilesButton = document.getElementById('chooseFilesButton');
+    const chooseFolderButton = document.getElementById('chooseFolderButton');
+    const queueSection = document.getElementById('uploadQueueSection');
+    const queueElement = document.getElementById('uploadQueue');
+    const summaryElement = document.getElementById('uploadSummary');
+    const clearFinishedButton = document.getElementById('clearFinishedButton');
+    const mediaGrid = document.getElementById('mediaGrid');
+    const emptyMediaState = document.getElementById('emptyMediaState');
+
+    const allowedVideoExtensions = new Set(['mp4', 'webm', 'ogg', 'mov', 'm4v']);
+    const allowedImageExtensions = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+    const queue = [];
+    const queuedKeys = new Set();
+    let activeUploads = 0;
+    let skippedFiles = 0;
+    let nextId = 1;
+
+    function extensionOf(name) {
+        const index = name.lastIndexOf('.');
+        return index === -1 ? '' : name.slice(index + 1).toLowerCase();
+    }
+
+    function isVideo(file) {
+        return file.type.startsWith('video/') || allowedVideoExtensions.has(extensionOf(file.name));
+    }
+
+    function isSupported(file) {
+        const extension = extensionOf(file.name);
+        return file.type.startsWith('video/') || file.type.startsWith('image/') ||
+            allowedVideoExtensions.has(extension) || allowedImageExtensions.has(extension);
+    }
+
+    function formatBytes(bytes) {
+        if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+        const value = bytes / (1024 ** index);
+        return `${value.toFixed(index === 0 || value >= 10 ? 0 : 1)} ${units[index]}`;
+    }
+
+    function fileKey(file) {
+        return `${file.webkitRelativePath || file.name}|${file.size}|${file.lastModified}`;
+    }
+
+    function createQueueRow(item) {
+        const row = document.createElement('div');
+        row.className = 'upload-queue-item';
+        row.dataset.queueId = String(item.id);
+        row.innerHTML = `
+            <div class="upload-file-info">
+                <div class="upload-file-name text-truncate" title=""></div>
+                <div class="small upload-file-meta"></div>
+            </div>
+            <div class="upload-actions">
+                <span class="upload-status small">等待</span>
+                <button class="btn btn-sm btn-outline-primary d-none js-retry-upload" type="button">重试</button>
+            </div>
+            <div class="progress upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="progress-bar" style="width: 0%"></div>
+            </div>`;
+        const displayName = item.file.webkitRelativePath || item.file.name;
+        const nameElement = row.querySelector('.upload-file-name');
+        nameElement.textContent = displayName;
+        nameElement.title = displayName;
+        row.querySelector('.upload-file-meta').textContent = formatBytes(item.file.size);
+        row.querySelector('.js-retry-upload').addEventListener('click', () => retryItem(item));
+        queueElement.appendChild(row);
+        item.row = row;
+    }
+
+    function updateQueueRow(item, status, percent = null, stateClass = '') {
+        if (!item.row) return;
+        item.row.classList.remove('upload-success', 'upload-error');
+        if (stateClass) item.row.classList.add(stateClass);
+        item.row.querySelector('.upload-status').textContent = status;
+        item.row.querySelector('.js-retry-upload').classList.toggle('d-none', item.state !== 'error');
+        if (percent !== null) {
+            const normalized = Math.max(0, Math.min(100, percent));
+            item.row.querySelector('.progress-bar').style.width = `${normalized}%`;
+            item.row.querySelector('.upload-progress').setAttribute('aria-valuenow', String(normalized));
+        }
+    }
+
+    function updateSummary() {
+        const pending = queue.filter(item => item.state === 'pending').length;
+        const uploading = queue.filter(item => item.state === 'uploading').length;
+        const completed = queue.filter(item => item.state === 'done').length;
+        const failed = queue.filter(item => item.state === 'error').length;
+        const parts = [`完成 ${completed}`, `上传中 ${uploading}`, `等待 ${pending}`, `失败 ${failed}`];
+        if (skippedFiles) parts.push(`跳过 ${skippedFiles}`);
+        summaryElement.textContent = parts.join(' · ');
+    }
+
+    function addEntries(entries) {
+        let added = 0;
+        for (const entry of entries) {
+            const file = entry.file;
+            const accepted = entry.fromDirectory ? isVideo(file) : isSupported(file);
+            if (!accepted || (maxFileBytes && file.size > maxFileBytes)) {
+                skippedFiles += 1;
+                continue;
+            }
+            const key = fileKey(file);
+            if (queuedKeys.has(key)) continue;
+            queuedKeys.add(key);
+            const item = {
+                id: nextId++,
+                file,
+                key,
+                state: 'pending',
+                row: null,
+                uploadedBytes: 0
+            };
+            queue.push(item);
+            createQueueRow(item);
+            added += 1;
+        }
+        if (added || skippedFiles) {
+            queueSection.classList.remove('d-none');
+            updateSummary();
+        }
+        pumpQueue();
+    }
+
+    function appendUploadedCard(html) {
+        const template = document.createElement('template');
+        template.innerHTML = html.trim();
+        const node = template.content.firstElementChild;
+        if (node) mediaGrid.prepend(node);
+        emptyMediaState?.classList.add('d-none');
+    }
+
+    async function parseJsonResponse(response) {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+            throw new Error(data.error || `请求失败（${response.status}）`);
+        }
+        return data;
+    }
+
+    async function initializeUpload(item) {
+        const response = await fetch(initUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken,
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'application/json'
+            },
+            body: JSON.stringify({
+                filename: item.file.name,
+                size: item.file.size,
+                chunk_size: requestedChunkSize,
+                client_key: item.key
+            })
+        });
+        return parseJsonResponse(response);
+    }
+
+    function expectedChunkBytes(fileSize, chunkSize, index) {
+        const start = index * chunkSize;
+        return Math.min(chunkSize, fileSize - start);
+    }
+
+    function uploadChunk(item, upload, chunkIndex, completedBytesBeforeChunk) {
+        return new Promise((resolve, reject) => {
+            const start = chunkIndex * upload.chunk_size;
+            const end = Math.min(start + upload.chunk_size, item.file.size);
+            const blob = item.file.slice(start, end);
+            const xhr = new XMLHttpRequest();
+            xhr.open('PUT', `${upload.chunk_url}?index=${chunkIndex}`);
+            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+            xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+            xhr.setRequestHeader('Accept', 'application/json');
+
+            xhr.upload.addEventListener('progress', (event) => {
+                if (!event.lengthComputable) return;
+                const overallBytes = completedBytesBeforeChunk + event.loaded;
+                const percent = Math.round((overallBytes / item.file.size) * 100);
+                updateQueueRow(item, `上传 ${percent}%`, percent);
+            });
+
+            xhr.addEventListener('load', () => {
+                let data = {};
+                try {
+                    data = JSON.parse(xhr.responseText || '{}');
+                } catch (_) {
+                    data = {};
+                }
+                if (xhr.status >= 200 && xhr.status < 300 && data.ok) {
+                    resolve();
+                } else {
+                    reject(new Error(data.error || `分块上传失败（${xhr.status}）`));
+                }
+            });
+            xhr.addEventListener('error', () => reject(new Error('网络错误')));
+            xhr.addEventListener('abort', () => reject(new Error('上传已取消')));
+            xhr.send(blob);
+        });
+    }
+
+    async function uploadChunkWithRetry(item, upload, chunkIndex, completedBytesBeforeChunk) {
+        let lastError;
+        for (let attempt = 1; attempt <= maxChunkAttempts; attempt += 1) {
+            try {
+                await uploadChunk(item, upload, chunkIndex, completedBytesBeforeChunk);
+                return;
+            } catch (error) {
+                lastError = error;
+                if (attempt < maxChunkAttempts) {
+                    updateQueueRow(item, `分块重试 ${attempt}/${maxChunkAttempts - 1}`);
+                    await new Promise(resolve => window.setTimeout(resolve, attempt * 500));
+                }
+            }
+        }
+        throw lastError || new Error('分块上传失败');
+    }
+
+    async function finalizeUpload(upload) {
+        const response = await fetch(upload.complete_url, {
+            method: 'POST',
+            headers: {
+                'X-CSRF-Token': csrfToken,
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'application/json'
+            }
+        });
+        return parseJsonResponse(response);
+    }
+
+    async function uploadItem(item) {
+        item.state = 'uploading';
+        activeUploads += 1;
+        updateQueueRow(item, '准备分块', 0);
+        updateSummary();
+
+        try {
+            const upload = await initializeUpload(item);
+            const received = new Set(upload.received_chunks || []);
+            let completedBytes = 0;
+            for (const index of received) {
+                completedBytes += expectedChunkBytes(item.file.size, upload.chunk_size, index);
+            }
+            updateQueueRow(
+                item,
+                received.size ? `继续上传 ${Math.round((completedBytes / item.file.size) * 100)}%` : '开始上传',
+                Math.round((completedBytes / item.file.size) * 100)
+            );
+
+            for (let index = 0; index < upload.total_chunks; index += 1) {
+                if (received.has(index)) continue;
+                await uploadChunkWithRetry(item, upload, index, completedBytes);
+                completedBytes += expectedChunkBytes(item.file.size, upload.chunk_size, index);
+                const percent = Math.round((completedBytes / item.file.size) * 100);
+                updateQueueRow(item, `上传 ${percent}%`, percent);
+            }
+
+            updateQueueRow(item, '正在合并', 100);
+            const data = await finalizeUpload(upload);
+            const uploaded = data.uploaded;
+            item.state = 'done';
+            const renamedText = uploaded.renamed ? ` · ${uploaded.original_name}` : '';
+            updateQueueRow(item, `完成${renamedText}`, 100, 'upload-success');
+            appendUploadedCard(uploaded.html);
+        } catch (error) {
+            item.state = 'error';
+            updateQueueRow(item, error.message || '上传失败', null, 'upload-error');
+        } finally {
+            activeUploads -= 1;
+            updateSummary();
+            pumpQueue();
+        }
+    }
+
+    function retryItem(item) {
+        if (item.state !== 'error') return;
+        item.state = 'pending';
+        updateQueueRow(item, '等待重试');
+        updateSummary();
+        pumpQueue();
+    }
+
+    function pumpQueue() {
+        while (activeUploads < fileConcurrency) {
+            const next = queue.find(item => item.state === 'pending');
+            if (!next) break;
+            uploadItem(next);
+        }
+    }
+
+    function readEntryFile(entry) {
+        return new Promise((resolve, reject) => entry.file(resolve, reject));
+    }
+
+    function readDirectoryBatch(reader) {
+        return new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+    }
+
+    async function readAllDirectoryEntries(directoryEntry) {
+        const reader = directoryEntry.createReader();
+        const entries = [];
+        while (true) {
+            const batch = await readDirectoryBatch(reader);
+            if (!batch.length) break;
+            entries.push(...batch);
+        }
+        return entries;
+    }
+
+    async function collectFromEntry(entry, fromDirectory = false) {
+        if (entry.isFile) {
+            const file = await readEntryFile(entry);
+            return [{file, fromDirectory}];
+        }
+        if (entry.isDirectory) {
+            const children = await readAllDirectoryEntries(entry);
+            const nested = await Promise.all(children.map(child => collectFromEntry(child, true)));
+            return nested.flat();
+        }
+        return [];
+    }
+
+    async function entriesFromDrop(event) {
+        const items = Array.from(event.dataTransfer?.items || []);
+        if (items.length && items.some(item => typeof item.webkitGetAsEntry === 'function')) {
+            const collected = [];
+            for (const item of items) {
+                const entry = item.webkitGetAsEntry?.();
+                if (entry) collected.push(...await collectFromEntry(entry, entry.isDirectory));
+            }
+            return collected;
+        }
+        return Array.from(event.dataTransfer?.files || []).map(file => ({file, fromDirectory: false}));
+    }
+
+    chooseFilesButton.addEventListener('click', event => {
+        event.stopPropagation();
+        fileInput.click();
+    });
+    chooseFolderButton.addEventListener('click', event => {
+        event.stopPropagation();
+        folderInput.click();
+    });
+    dropZone.addEventListener('click', event => {
+        if (!event.target.closest('button')) fileInput.click();
+    });
+    dropZone.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            fileInput.click();
+        }
+    });
+
+    fileInput.addEventListener('change', () => {
+        addEntries(Array.from(fileInput.files || []).map(file => ({file, fromDirectory: false})));
+        fileInput.value = '';
+    });
+    folderInput.addEventListener('change', () => {
+        addEntries(Array.from(folderInput.files || []).map(file => ({file, fromDirectory: true})));
+        folderInput.value = '';
+    });
+
+    for (const eventName of ['dragenter', 'dragover']) {
+        dropZone.addEventListener(eventName, event => {
+            event.preventDefault();
+            event.stopPropagation();
+            dropZone.classList.add('is-dragging');
+        });
+    }
+    for (const eventName of ['dragleave', 'drop']) {
+        dropZone.addEventListener(eventName, event => {
+            event.preventDefault();
+            event.stopPropagation();
+            dropZone.classList.remove('is-dragging');
+        });
+    }
+    dropZone.addEventListener('drop', async event => {
+        try {
+            addEntries(await entriesFromDrop(event));
+        } catch (error) {
+            window.alert(error.message || '无法读取文件夹。');
+        }
+    });
+
+    clearFinishedButton.addEventListener('click', () => {
+        for (let index = queue.length - 1; index >= 0; index -= 1) {
+            const item = queue[index];
+            if (item.state === 'done' || item.state === 'error') {
+                item.row?.remove();
+                queuedKeys.delete(item.key);
+                queue.splice(index, 1);
+            }
+        }
+        skippedFiles = 0;
+        updateSummary();
+        if (!queue.length) queueSection.classList.add('d-none');
+    });
+
+    document.addEventListener('click', async event => {
+        const button = event.target.closest('.js-delete-media');
+        if (!button) return;
+        const card = button.closest('[data-media-card]');
+        const fileName = button.dataset.fileName || '这个文件';
+        if (!window.confirm(`删除“${fileName}”？`)) return;
+        button.disabled = true;
+        try {
+            const response = await fetch(button.dataset.deleteUrl, {
+                method: 'POST',
+                headers: {
+                    'X-CSRF-Token': csrfToken,
+                    'X-Requested-With': 'XMLHttpRequest',
+                    Accept: 'application/json'
+                }
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.ok) throw new Error(data.error || '删除失败。');
+            card?.remove();
+            if (!mediaGrid.querySelector('[data-media-card]')) emptyMediaState?.classList.remove('d-none');
+        } catch (error) {
+            button.disabled = false;
+            window.alert(error.message || '删除失败。');
+        }
+    });
+})();

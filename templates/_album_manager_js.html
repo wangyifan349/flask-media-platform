@@ -1,0 +1,126 @@
+(() => {
+    'use strict';
+
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    const grid = document.getElementById('albumGrid');
+    const emptyState = document.getElementById('albumEmptyState');
+    const contextMenu = document.getElementById('albumContextMenu');
+    let contextCard = null;
+
+    if (!grid || !contextMenu) return;
+
+    async function postJson(url, body = {}) {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken,
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'application/json'
+            },
+            body: JSON.stringify(body)
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+            throw new Error(data.error || `请求失败（${response.status}）`);
+        }
+        return data;
+    }
+
+    function getCard(target) {
+        return target.closest('.album-management-card');
+    }
+
+    function updateVisibility(card, data) {
+        card.dataset.hidden = data.is_hidden ? '1' : '0';
+        card.querySelector('.album-hidden-badge')?.classList.toggle('d-none', !data.is_hidden);
+        const toggleButton = card.querySelector('.js-toggle-album-visibility');
+        if (toggleButton) toggleButton.textContent = data.label;
+    }
+
+    async function toggleVisibility(card) {
+        const nextHidden = card.dataset.hidden !== '1';
+        const data = await postJson(card.dataset.visibilityUrl, {is_hidden: nextHidden});
+        updateVisibility(card, data);
+    }
+
+    async function deleteAlbum(card) {
+        const title = card.dataset.albumTitle || '这个专辑';
+        if (!window.confirm(`确定删除“${title}”及其中的全部文件吗？此操作不可恢复。`)) return;
+        await postJson(card.dataset.deleteUrl);
+        const column = card.closest('[data-album-column]');
+        column?.remove();
+        if (!grid.querySelector('[data-album-column]')) {
+            emptyState?.classList.remove('d-none');
+        }
+    }
+
+    async function runAction(action, card) {
+        if (!card) return;
+        try {
+            if (action === 'open') window.location.href = card.dataset.openUrl;
+            if (action === 'edit') window.location.href = card.dataset.editUrl;
+            if (action === 'visibility') await toggleVisibility(card);
+            if (action === 'delete') await deleteAlbum(card);
+        } catch (error) {
+            window.alert(error.message || '操作失败，请刷新页面后重试。');
+        }
+    }
+
+    grid.addEventListener('click', (event) => {
+        const card = getCard(event.target);
+        if (!card) return;
+        if (event.target.closest('.js-toggle-album-visibility')) {
+            event.preventDefault();
+            runAction('visibility', card);
+        } else if (event.target.closest('.js-delete-album')) {
+            event.preventDefault();
+            runAction('delete', card);
+        }
+    });
+
+    function hideContextMenu() {
+        contextMenu.classList.remove('show');
+        contextMenu.setAttribute('aria-hidden', 'true');
+        contextCard = null;
+    }
+
+    grid.addEventListener('contextmenu', (event) => {
+        const card = getCard(event.target);
+        if (!card) return;
+        event.preventDefault();
+        contextCard = card;
+
+        const visibilityButton = contextMenu.querySelector('[data-context-action="visibility"]');
+        if (visibilityButton) {
+            visibilityButton.textContent = card.dataset.hidden === '1' ? '设为公开' : '设为隐藏';
+        }
+
+        contextMenu.classList.add('show');
+        contextMenu.setAttribute('aria-hidden', 'false');
+        const rect = contextMenu.getBoundingClientRect();
+        const left = Math.min(event.clientX, window.innerWidth - rect.width - 8);
+        const top = Math.min(event.clientY, window.innerHeight - rect.height - 8);
+        contextMenu.style.left = `${Math.max(8, left)}px`;
+        contextMenu.style.top = `${Math.max(8, top)}px`;
+    });
+
+    contextMenu.addEventListener('click', (event) => {
+        const actionButton = event.target.closest('[data-context-action]');
+        if (!actionButton) return;
+        const card = contextCard;
+        const action = actionButton.dataset.contextAction;
+        hideContextMenu();
+        runAction(action, card);
+    });
+
+    document.addEventListener('click', (event) => {
+        if (!contextMenu.contains(event.target)) hideContextMenu();
+    });
+    window.addEventListener('blur', hideContextMenu);
+    window.addEventListener('resize', hideContextMenu);
+    window.addEventListener('scroll', hideContextMenu, true);
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') hideContextMenu();
+    });
+})();

@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block title %}我的专辑 · MediaHub{% endblock %}
+{% block content %}
+<div class="page-toolbar">
+    <div class="page-toolbar-main"><h1 class="h4 mb-0">我的专辑</h1></div>
+    <div class="page-toolbar-actions"><a class="btn btn-primary btn-sm" href="{{ url_for('create_album') }}">创建</a></div>
+</div>
+<div id="albumEmptyState" class="empty-state{% if albums %} d-none{% endif %}">暂无专辑</div>
+<div id="albumGrid" class="row row-cols-1 row-cols-sm-2 row-cols-lg-3 row-cols-xl-4 g-3">
+    {% set management_mode = true %}
+    {% for album in albums %}
+        {% include '_album_card.html' %}
+    {% endfor %}
+</div>
+<div id="albumContextMenu" class="context-menu" role="menu" aria-hidden="true">
+    <button type="button" class="context-menu-item" data-context-action="open">打开</button>
+    <button type="button" class="context-menu-item" data-context-action="edit">重命名</button>
+    <button type="button" class="context-menu-item" data-context-action="visibility">隐藏</button>
+    <div class="context-menu-divider"></div>
+    <button type="button" class="context-menu-item text-danger" data-context-action="delete">删除</button>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+{% include '_album_manager_js.html' %}
+</script>
+{% endblock %}

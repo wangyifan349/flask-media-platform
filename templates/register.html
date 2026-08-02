@@ -1,0 +1,30 @@
+{% extends 'base.html' %}
+{% block title %}注册 · MediaHub{% endblock %}
+{% block content %}
+<div class="auth-card mx-auto">
+    <h1 class="h4 mb-3">注册</h1>
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="mb-3">
+            <label class="form-label">用户名</label>
+            <input class="form-control" name="username" minlength="3" maxlength="30" required value="{{ request.form.get('username', '') }}">
+        </div>
+        <div class="mb-3">
+            <label class="form-label">显示名称</label>
+            <input class="form-control" name="display_name" maxlength="50" required value="{{ request.form.get('display_name', '') }}">
+        </div>
+        <div class="mb-3">
+            <label class="form-label">密码</label>
+            <input class="form-control" type="password" name="password" minlength="8" required>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">确认密码</label>
+            <input class="form-control" type="password" name="confirm_password" minlength="8" required>
+        </div>
+        <div class="form-actions">
+            <button class="btn btn-primary" type="submit">注册</button>
+            <a class="btn btn-outline-primary" href="{{ url_for('login') }}">登录</a>
+        </div>
+    </form>
+</div>
+{% endblock %}
