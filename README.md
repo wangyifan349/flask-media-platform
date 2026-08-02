@@ -240,7 +240,7 @@ The application automatically creates `app.db` and the required SQLite tables on
 ## Download, Install, and Run
 
 ```bash
-git clone https://github.com/your-username/flask-media-platform.git
+git clone https://github.com/wangyifan349/flask-media-platform.git
 cd flask-media-platform
 pip install -r requirements.txt
 python server_app.py
