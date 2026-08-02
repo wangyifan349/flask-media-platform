@@ -1,6 +1,7 @@
 (() => {
     'use strict';
 
+    // ----- Upload configuration and page elements -----
     const panel = document.getElementById('uploadPanel');
     if (!panel) return;
 
@@ -31,6 +32,7 @@
     let skippedFiles = 0;
     let nextId = 1;
 
+    // ----- File validation and upload queue -----
     function extensionOf(name) {
         const index = name.lastIndexOf('.');
         return index === -1 ? '' : name.slice(index + 1).toLowerCase();
@@ -146,6 +148,7 @@
         emptyMediaState?.classList.add('d-none');
     }
 
+    // ----- Chunked-upload network requests -----
     async function parseJsonResponse(response) {
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.ok) {
@@ -276,9 +279,13 @@
             const data = await finalizeUpload(upload);
             const uploaded = data.uploaded;
             item.state = 'done';
-            const renamedText = uploaded.renamed ? ` · ${uploaded.original_name}` : '';
-            updateQueueRow(item, `完成${renamedText}`, 100, 'upload-success');
-            appendUploadedCard(uploaded.html);
+            if (uploaded.duplicate) {
+                updateQueueRow(item, '重复文件已自动删除', 100, 'upload-success');
+            } else {
+                const renamedText = uploaded.renamed ? ` · ${uploaded.original_name}` : '';
+                updateQueueRow(item, `完成${renamedText}`, 100, 'upload-success');
+                appendUploadedCard(uploaded.html);
+            }
         } catch (error) {
             item.state = 'error';
             updateQueueRow(item, error.message || '上传失败', null, 'upload-error');
@@ -305,6 +312,7 @@
         }
     }
 
+    // ----- Recursive folder and drag-and-drop reading -----
     function readEntryFile(entry) {
         return new Promise((resolve, reject) => entry.file(resolve, reject));
     }
@@ -350,6 +358,7 @@
         return Array.from(event.dataTransfer?.files || []).map(file => ({file, fromDirectory: false}));
     }
 
+    // ----- User interaction handlers -----
     chooseFilesButton.addEventListener('click', event => {
         event.stopPropagation();
         fileInput.click();

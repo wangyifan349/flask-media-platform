@@ -1,3 +1,9 @@
+"""Flask Media Platform main application.
+
+This file contains fixed configuration, database access, routes, uploads,
+search, and startup logic.
+"""
+import hashlib
 import os
 import secrets
 import shutil
@@ -21,7 +27,7 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 
-# ----- Configuration -----
+# ----- Fixed application configuration -----
 BASE_DIRECTORY = Path(__file__).resolve().parent
 DATABASE_PATH = BASE_DIRECTORY / "app.db"
 UPLOAD_DIRECTORY = BASE_DIRECTORY / "uploads"
@@ -46,7 +52,7 @@ app.config.update(
 UPLOAD_DIRECTORY.mkdir(parents=True, exist_ok=True)
 CHUNK_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
-# ----- Database -----
+# ----- Database access and initialization -----
 def get_database():
     if "database" in g:
         return g.database
@@ -89,6 +95,8 @@ def initialize_database():
             original_name TEXT NOT NULL,
             stored_name TEXT NOT NULL UNIQUE,
             media_type TEXT NOT NULL CHECK(media_type IN ('image', 'video')),
+            file_hash TEXT,
+            file_size INTEGER,
             uploaded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE
         );
@@ -115,6 +123,18 @@ def initialize_database():
         CREATE INDEX IF NOT EXISTS idx_upload_sessions_lookup
         ON upload_sessions(user_id, album_id, client_key, status);
         """
+    )
+    # Add newer hash columns when an existing database uses an older schema.
+    media_columns = {
+        column_record["name"]
+        for column_record in database_connection.execute("PRAGMA table_info(media)").fetchall()
+    }
+    if "file_hash" not in media_columns:
+        database_connection.execute("ALTER TABLE media ADD COLUMN file_hash TEXT")
+    if "file_size" not in media_columns:
+        database_connection.execute("ALTER TABLE media ADD COLUMN file_size INTEGER")
+    database_connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_media_album_hash ON media(album_id, file_size, file_hash)"
     )
     database_connection.commit()
 
@@ -162,7 +182,7 @@ def wants_json_response():
 def json_error(message, status_code):
     return jsonify(ok=False, error=message), status_code
 
-# ----- Album and media helpers -----
+# ----- Album and media helper functions -----
 def get_album_or_404(album_id):
     album_record = get_database().execute(
         """
@@ -234,7 +254,67 @@ def delete_stored_media(stored_name):
     if media_path.is_file():
         media_path.unlink()
 
-# ----- Chunk upload helpers -----
+def calculate_file_hash(file_path):
+    hash_calculator = hashlib.sha256()
+    with file_path.open("rb") as input_stream:
+        while True:
+            file_block = input_stream.read(4 * 1024 * 1024)
+            if not file_block:
+                break
+            hash_calculator.update(file_block)
+    return hash_calculator.hexdigest()
+
+def scan_album_for_duplicate_media(database_connection, album_id):
+    media_records = database_connection.execute(
+        "SELECT id, original_name, stored_name FROM media WHERE album_id = ? ORDER BY id",
+        (album_id,),
+    ).fetchall()
+    # The first file with a given size and SHA-256 value is retained.
+    retained_files = {}
+    hash_updates = []
+    duplicate_records = []
+    for media_record in media_records:
+        media_path = UPLOAD_DIRECTORY / media_record["stored_name"]
+        if not media_path.is_file():
+            continue
+        try:
+            file_size = media_path.stat().st_size
+            file_hash = calculate_file_hash(media_path)
+        except OSError:
+            app.logger.exception("Failed to hash media file: %s", media_path)
+            continue
+        hash_updates.append((file_hash, file_size, media_record["id"]))
+        duplicate_key = (file_size, file_hash)
+        if duplicate_key in retained_files:
+            duplicate_records.append(media_record)
+            continue
+        retained_files[duplicate_key] = media_record["id"]
+    # Update hashes and remove duplicate database rows in one write transaction.
+    database_connection.execute("BEGIN IMMEDIATE")
+    database_connection.executemany(
+        "UPDATE media SET file_hash = ?, file_size = ? WHERE id = ?",
+        hash_updates,
+    )
+    if duplicate_records:
+        database_connection.executemany(
+            "DELETE FROM media WHERE id = ?",
+            [(media_record["id"],) for media_record in duplicate_records],
+        )
+    database_connection.commit()
+    for duplicate_record in duplicate_records:
+        try:
+            delete_stored_media(duplicate_record["stored_name"])
+        except OSError:
+            app.logger.exception(
+                "Failed to delete duplicate media file: %s",
+                duplicate_record["stored_name"],
+            )
+    return {
+        "removed_ids": {media_record["id"] for media_record in duplicate_records},
+        "removed_names": [media_record["original_name"] for media_record in duplicate_records],
+    }
+
+# ----- Chunked-upload helper functions -----
 def get_upload_directory(upload_id):
     return CHUNK_DIRECTORY / upload_id
 
@@ -359,7 +439,7 @@ def reactivate_upload_session(database_connection, upload_id):
     )
     database_connection.commit()
 
-# ----- Public routes -----
+# ----- Public page routes -----
 @app.route("/")
 def index():
     album_records = get_database().execute(
@@ -385,8 +465,8 @@ def validate_registration_form(username, display_name, password, confirmed_passw
         return "用户名只能包含字母、数字和下划线。"
     if not display_name or len(display_name) > 50:
         return "显示名称不能为空，且不能超过 50 个字符。"
-    if len(password) < 8:
-        return "密码至少需要 8 个字符。"
+    if not password:
+        return "密码不能为空。"
     if password != confirmed_password:
         return "两次输入的密码不一致。"
     return None
@@ -463,8 +543,8 @@ def change_password():
     if not check_password_hash(user_record["password_hash"], current_password):
         flash("当前密码不正确。", "danger")
         return render_template("change_password.html")
-    if len(new_password) < 8:
-        flash("新密码至少需要 8 个字符。", "danger")
+    if not new_password:
+        flash("新密码不能为空。", "danger")
         return render_template("change_password.html")
     if new_password != confirmed_password:
         flash("两次输入的新密码不一致。", "danger")
@@ -478,7 +558,7 @@ def change_password():
     flash("密码已修改。", "success")
     return redirect(url_for("dashboard"))
 
-# ----- Album routes -----
+# ----- Album management routes -----
 @app.route("/dashboard")
 @login_required
 def dashboard():
@@ -558,7 +638,10 @@ def change_album_visibility(album_id):
     require_album_owner(album_record)
     request_payload = request.get_json(silent=True) or {}
     requested_visibility = request_payload.get("is_hidden")
-    is_hidden = int(bool(requested_visibility)) if "is_hidden" in request_payload else int(not album_record["is_hidden"])
+    if "is_hidden" in request_payload:
+        is_hidden = int(bool(requested_visibility))
+    else:
+        is_hidden = int(not album_record["is_hidden"])
     database_connection = get_database()
     database_connection.execute(
         "UPDATE albums SET is_hidden = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -596,7 +679,7 @@ def delete_album(album_id):
     flash("专辑及其中的媒体文件已删除。", "success")
     return redirect(url_for("dashboard"))
 
-# ----- Chunk upload routes -----
+# ----- Chunked-upload API routes -----
 @app.post("/albums/<int:album_id>/uploads/init")
 @login_required
 def init_chunked_upload(album_id):
@@ -609,6 +692,7 @@ def init_chunked_upload(album_id):
         return validation_response
     database_connection = get_database()
     remove_stale_uploads(database_connection)
+    # Reuse an active session so selecting the same file can resume uploaded chunks.
     upload_session = database_connection.execute(
         """
         SELECT * FROM upload_sessions
@@ -681,6 +765,7 @@ def upload_chunk(upload_id):
     upload_directory = get_upload_directory(upload_id)
     upload_directory.mkdir(parents=True, exist_ok=True)
     destination_path = get_chunk_path(upload_id, chunk_index)
+    # A correctly sized chunk is idempotent and does not need to be written again.
     if destination_path.is_file() and destination_path.stat().st_size == expected_size:
         return jsonify(ok=True, index=chunk_index, already_received=True)
     temporary_path = upload_directory / f".{chunk_index:08d}.{uuid.uuid4().hex}.tmp"
@@ -717,6 +802,7 @@ def complete_chunked_upload(upload_id):
             received_chunks=received_indexes,
         ), 409
     database_connection = get_database()
+    # Atomically claim the completion step to prevent concurrent file assembly.
     update_result = database_connection.execute(
         """
         UPDATE upload_sessions
@@ -750,9 +836,36 @@ def complete_chunked_upload(upload_id):
         app.logger.exception("Failed to complete chunked upload")
         return json_error("文件合并失败，可点击重试继续。", 500)
     remove_upload_directory(upload_id)
+    duplicate_scan = scan_album_for_duplicate_media(
+        database_connection, upload_session["album_id"]
+    )
+    if media_id in duplicate_scan["removed_ids"]:
+        return jsonify(
+            ok=True,
+            uploaded={
+                "id": media_id,
+                "original_name": upload_session["original_name"],
+                "renamed": False,
+                "media_type": upload_session["media_type"],
+                "duplicate": True,
+                "html": "",
+            },
+        )
     media_record = database_connection.execute(
         "SELECT * FROM media WHERE id = ?", (media_id,)
     ).fetchone()
+    if media_record is None:
+        return jsonify(
+            ok=True,
+            uploaded={
+                "id": media_id,
+                "original_name": upload_session["original_name"],
+                "renamed": False,
+                "media_type": upload_session["media_type"],
+                "duplicate": True,
+                "html": "",
+            },
+        )
     album_record = get_album_or_404(upload_session["album_id"])
     return jsonify(
         ok=True,
@@ -761,13 +874,14 @@ def complete_chunked_upload(upload_id):
             "original_name": media_record["original_name"],
             "renamed": media_record["original_name"] != upload_session["original_name"],
             "media_type": media_record["media_type"],
+            "duplicate": False,
             "html": render_template(
                 "_media_card.html", item=media_record, album=album_record
             ),
         },
     )
 
-# ----- Standard upload route -----
+# ----- Standard multi-file upload route -----
 @app.post("/albums/<int:album_id>/upload")
 @login_required
 def upload_media(album_id):
@@ -822,25 +936,43 @@ def upload_media(album_id):
                 "original_name": media_record["original_name"],
                 "renamed": media_record["original_name"] != original_filename,
                 "media_type": media_record["media_type"],
+                "duplicate": False,
                 "html": render_template(
                     "_media_card.html", item=media_record, album=album_record
                 ),
             }
         )
+    duplicate_scan = scan_album_for_duplicate_media(database_connection, album_id)
+    removed_ids = duplicate_scan["removed_ids"]
+    duplicate_results = [
+        uploaded_result for uploaded_result in uploaded_results
+        if uploaded_result["id"] in removed_ids
+    ]
+    uploaded_results = [
+        uploaded_result for uploaded_result in uploaded_results
+        if uploaded_result["id"] not in removed_ids
+    ]
+    for duplicate_result in duplicate_results:
+        duplicate_result["duplicate"] = True
+        duplicate_result["html"] = ""
     if wants_json_response():
-        status_code = 200 if uploaded_results else 415
+        has_processed_files = bool(uploaded_results or duplicate_results)
+        status_code = 200 if has_processed_files else 415
         return jsonify(
-            ok=bool(uploaded_results),
+            ok=has_processed_files,
             uploaded=uploaded_results,
+            duplicates=duplicate_results,
             rejected=rejected_results,
         ), status_code
     if uploaded_results:
         flash(f"成功上传 {len(uploaded_results)} 个文件。", "success")
+    if duplicate_results:
+        flash(f"检测并删除了 {len(duplicate_results)} 个重复文件。", "warning")
     if rejected_results:
         flash(f"有 {len(rejected_results)} 个文件未上传。", "warning")
     return redirect(url_for("album_detail", album_id=album_id))
 
-# ----- Media routes -----
+# ----- Media access and deletion routes -----
 @app.route("/media/<int:media_id>/file")
 def media_file(media_id):
     media_record = get_database().execute(
@@ -889,7 +1021,7 @@ def delete_media(media_id):
     flash("媒体文件已删除。", "success")
     return redirect(url_for("album_detail", album_id=media_record["album_id"]))
 
-# ----- User and search routes -----
+# ----- User profile and live-search routes -----
 @app.route("/users/<username>")
 def user_profile(username):
     user_record = get_database().execute(
@@ -923,27 +1055,102 @@ def user_profile(username):
         is_owner=is_owner,
     )
 
-@app.route("/search")
-def search():
-    search_query = request.args.get("q", "").strip()
-    if not search_query:
-        return render_template("search.html", query=search_query, users=[])
-    search_pattern = f"%{search_query}%"
-    user_records = get_database().execute(
+def normalize_search_text(text):
+    return " ".join((text or "").casefold().split())
+
+def longest_common_subsequence_length(search_text, candidate_text):
+    normalized_search = normalize_search_text(search_text)
+    normalized_candidate = normalize_search_text(candidate_text)
+    if not normalized_search or not normalized_candidate:
+        return 0
+    # Use a two-row dynamic-programming table to keep memory usage linear.
+    previous_row = [0] * (len(normalized_candidate) + 1)
+    for search_character in normalized_search:
+        current_row = [0]
+        for candidate_index, candidate_character in enumerate(normalized_candidate, start=1):
+            if search_character == candidate_character:
+                current_row.append(previous_row[candidate_index - 1] + 1)
+                continue
+            current_row.append(max(current_row[-1], previous_row[candidate_index]))
+        previous_row = current_row
+    return previous_row[-1]
+
+def build_search_results(search_query):
+    database_connection = get_database()
+    user_records = database_connection.execute(
         """
         SELECT users.id, users.username, users.display_name, users.created_at,
                (SELECT COUNT(*) FROM albums
                 WHERE albums.user_id = users.id AND albums.is_hidden = 0) AS public_album_count
         FROM users
-        WHERE username LIKE ? COLLATE NOCASE OR display_name LIKE ? COLLATE NOCASE
-        ORDER BY username ASC
-        LIMIT 50
-        """,
-        (search_pattern, search_pattern),
+        """
     ).fetchall()
-    return render_template("search.html", query=search_query, users=user_records)
+    album_records = database_connection.execute(
+        """
+        SELECT albums.id, albums.title, albums.created_at,
+               users.username, users.display_name,
+               (SELECT COUNT(*) FROM media WHERE media.album_id = albums.id) AS media_count
+        FROM albums
+        JOIN users ON users.id = albums.user_id
+        WHERE albums.is_hidden = 0
+        """
+    ).fetchall()
+    search_results = []
+    for user_record in user_records:
+        username_score = longest_common_subsequence_length(search_query, user_record["username"])
+        display_name_score = longest_common_subsequence_length(
+            search_query, user_record["display_name"]
+        )
+        match_score = max(username_score, display_name_score)
+        if match_score == 0:
+            continue
+        search_results.append(
+            {
+                "result_type": "user",
+                "primary_text": user_record["display_name"],
+                "secondary_text": f"@{user_record['username']}",
+                "badge_text": f"用户 · {user_record['public_album_count']}",
+                "url": url_for("user_profile", username=user_record["username"]),
+                "lcs_score": match_score,
+                "sort_text": normalize_search_text(user_record["display_name"]),
+            }
+        )
+    for album_record in album_records:
+        match_score = longest_common_subsequence_length(search_query, album_record["title"])
+        if match_score == 0:
+            continue
+        search_results.append(
+            {
+                "result_type": "album",
+                "primary_text": album_record["title"],
+                "secondary_text": (
+                    f"{album_record['display_name']} @{album_record['username']}"
+                ),
+                "badge_text": f"专辑 · {album_record['media_count']}",
+                "url": url_for("album_detail", album_id=album_record["id"]),
+                "lcs_score": match_score,
+                "sort_text": normalize_search_text(album_record["title"]),
+            }
+        )
+    # Higher LCS scores appear first; text and type provide deterministic tie-breaking.
+    search_results.sort(
+        key=lambda result: (
+            -result["lcs_score"],
+            result["sort_text"],
+            result["result_type"],
+        )
+    )
+    return search_results[:50]
 
-# ----- Error handlers -----
+@app.route("/search")
+def search():
+    search_query = request.args.get("q", "").strip()[:120]
+    search_results = build_search_results(search_query) if search_query else []
+    if request.args.get("format") == "json" or wants_json_response():
+        return jsonify(ok=True, query=search_query, results=search_results)
+    return render_template("search.html", query=search_query, results=search_results)
+
+# ----- HTTP error handlers -----
 def render_error_response(code, message):
     if wants_json_response():
         return jsonify(ok=False, error=message), code
@@ -965,7 +1172,7 @@ def forbidden(_error):
 def not_found(_error):
     return render_error_response(404, "页面或内容不存在。")
 
-# ----- Application startup -----
+# ----- Database initialization and application startup -----
 with app.app_context():
     initialize_database()
 

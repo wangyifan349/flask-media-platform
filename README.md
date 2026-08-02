@@ -8,7 +8,7 @@ Flask Media Platform is a lightweight web application for organizing and sharing
 
 The project focuses on account management, album management, media storage, large-file uploading, and user search. It intentionally does not include comments, bullet comments, likes, favorites, or complex social features. It can be used as a personal video site, a portfolio, an internal media library, or a practical Flask project.
 
-The interface is responsive and works on phones, tablets, and desktop computers. Bootstrap CSS, project CSS, Bootstrap JavaScript, and application JavaScript are rendered inline through Jinja templates, so the application does not depend on its own external CSS or JavaScript files. Custom literal colors are configured with a blue channel value of `0`.
+The interface is responsive and works on phones, tablets, and desktop computers. Bootstrap CSS, project CSS, Bootstrap JavaScript, and application JavaScript are rendered inline through Jinja templates, so the application does not depend on its own external CSS or JavaScript files. All literal CSS, RGB/RGBA, and embedded SVG colors are configured with a blue channel value of `0`. Runtime paths, limits, host, port, and debug settings are fixed in the source code and are not read from environment variables.
 
 ## Main Features
 
@@ -51,6 +51,8 @@ Albums do not require descriptions. Users only enter an album name and choose it
 - Independent progress and status for each file
 - A failed file does not stop the remaining queue
 - AJAX media deletion
+- SHA-256 duplicate-content detection after each completed upload
+- Automatic removal of later duplicate records and physical files within the same album
 
 Duplicate names inside the same album are handled without overwriting existing files:
 
@@ -64,6 +66,9 @@ video (3).mp4
 
 - Search by username
 - Search by display name
+- Search by public album name
+- Rank mixed user and album results by longest common subsequence score in descending order
+- Refresh search results through AJAX while typing
 - View public user profiles
 - View public albums
 - Hidden albums are excluded from public pages and search results
@@ -122,6 +127,8 @@ Stores media records:
 - Original file name
 - Server storage name
 - Media type
+- SHA-256 file hash
+- File size
 - Upload time
 
 ### `upload_sessions`
@@ -157,7 +164,7 @@ Stores chunked-upload sessions:
 | `GET` | `/media/<media_id>/file` | Read a media file | Visibility-based access |
 | `POST` | `/media/<media_id>/delete` | Delete media through AJAX | Album owner |
 | `GET` | `/users/<username>` | Public user profile | Public |
-| `GET` | `/search?q=keyword` | Search users | Public |
+| `GET` | `/search?q=keyword` | Search users and public albums | Public |
 
 ## Chunked Upload Endpoints
 
@@ -176,6 +183,7 @@ Chunked-upload flow:
 5. The completion endpoint validates and merges all chunks.
 6. The server stores the final file and inserts a record into `media`.
 7. Duplicate display names receive an automatic numeric suffix.
+8. The server scans the completed album with SHA-256 and removes later files whose content is identical.
 
 ## Supported File Types
 
@@ -207,8 +215,8 @@ File types are filtered in the browser and validated again by the server. Files 
 
 ```text
 flask-media-platform/
-├── app.py                     # Flask application, routes, and business logic
-├── server_app.py              # Direct startup entry point
+├── app.py                     # Complete Flask application and executable entry point
+├── server_app.py              # Alternative executable entry point for the same application
 ├── requirements.txt           # Python dependencies
 ├── README.md                  # English documentation
 ├── README.zh.md               # Chinese documentation
@@ -222,7 +230,7 @@ flask-media-platform/
 │   ├── album_form.html        # Album create and edit form
 │   ├── album_detail.html      # Album details and upload area
 │   ├── user_profile.html      # Public user profile
-│   ├── search.html            # User search page
+│   ├── search.html            # Live user and album search page
 │   ├── error.html             # Error page
 │   ├── _album_card.html       # Album card component
 │   ├── _media_card.html       # Media card component
@@ -240,7 +248,7 @@ The application automatically creates `app.db` and the required SQLite tables on
 ## Download, Install, and Run
 
 ```bash
-git clone https://github.com/wangyifan349/flask-media-platform.git
+git clone https://github.com/your-username/flask-media-platform.git
 cd flask-media-platform
 pip install -r requirements.txt
 python server_app.py

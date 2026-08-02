@@ -20,7 +20,7 @@
         </button>
         <div class="collapse navbar-collapse" id="mainNavbar">
             <form class="nav-search d-flex ms-lg-4 my-2 my-lg-0 flex-grow-1" action="{{ url_for('search') }}" method="get">
-                <input class="form-control me-2" type="search" name="q" value="{{ request.args.get('q', '') }}" placeholder="搜索用户" aria-label="搜索用户">
+                <input class="form-control me-2" type="search" name="q" value="{{ request.args.get('q', '') }}" placeholder="搜索用户名或专辑名" aria-label="搜索用户名或专辑名" maxlength="120">
                 <button class="btn btn-outline-light" type="submit">搜索</button>
             </form>
             <ul class="navbar-nav ms-lg-3 align-items-lg-center">
@@ -43,7 +43,7 @@
     </div>
 </nav>
 
-<main class="container-fluid app-container py-3 py-md-4">
+<main class="container-fluid app-container pt-2 pb-3 pt-md-2 pb-md-4">
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
             {% for category, message in messages %}

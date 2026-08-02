@@ -8,7 +8,7 @@ Flask Media Platform 是一个面向个人媒体整理与分享的 Web 项目。
 
 平台重点提供账户、专辑、媒体文件和用户搜索等基础功能，不包含评论、弹幕、点赞、收藏或复杂社交模块。页面只展示实际功能，适合用作个人视频站、作品集、内部媒体库或 Flask 学习项目。
 
-项目使用响应式布局，同一套页面可以在手机、平板和电脑上使用。项目 CSS、Bootstrap CSS、Bootstrap JavaScript 和业务 JavaScript 均通过 Jinja 模板内联到 HTML 中，不依赖项目自己的外部 CSS 或 JavaScript 文件。页面自定义颜色已按要求处理，颜色字面值中的蓝色通道为 `0`。
+项目使用响应式布局，同一套页面可以在手机、平板和电脑上使用。项目 CSS、Bootstrap CSS、Bootstrap JavaScript 和业务 JavaScript 均通过 Jinja 模板内联到 HTML 中，不依赖项目自己的外部 CSS 或 JavaScript 文件。所有 CSS、RGB/RGBA 和内嵌 SVG 的颜色字面值都已将蓝色通道设为 `0`。运行目录、文件限制、主机、端口和调试状态均固定写在源代码中，不读取环境变量。
 
 ## 核心功能
 
@@ -51,6 +51,8 @@ Flask Media Platform 是一个面向个人媒体整理与分享的 Web 项目。
 - 每个文件独立显示上传进度和状态
 - 单个文件失败不会影响其他文件
 - 支持 AJAX 删除媒体文件
+- 每个文件上传完成后执行 SHA-256 内容查重
+- 自动删除同一专辑中后出现的重复数据库记录和物理文件
 
 同一专辑中出现重名文件时，系统不会覆盖原文件，而是自动生成新的显示名称：
 
@@ -64,6 +66,9 @@ video (3).mp4
 
 - 按用户名搜索用户
 - 按显示名称搜索用户
+- 按公开专辑名称搜索专辑
+- 用户与专辑混合结果按最长公共子序列得分降序排列
+- 输入关键词时通过 AJAX 实时刷新搜索结果
 - 查看用户公开主页
 - 查看用户公开专辑
 - 隐藏专辑不会出现在搜索结果或公开主页中
@@ -122,6 +127,8 @@ video (3).mp4
 - 原始文件名
 - 服务器存储文件名
 - 媒体类型
+- SHA-256 文件哈希
+- 文件大小
 - 上传时间
 
 ### `upload_sessions`
@@ -157,7 +164,7 @@ video (3).mp4
 | `GET` | `/media/<media_id>/file` | 读取媒体文件 | 按专辑权限判断 |
 | `POST` | `/media/<media_id>/delete` | AJAX 删除媒体文件 | 专辑所有者 |
 | `GET` | `/users/<username>` | 用户公开主页 | 公开 |
-| `GET` | `/search?q=关键词` | 搜索用户 | 公开 |
+| `GET` | `/search?q=关键词` | 搜索用户和公开专辑 | 公开 |
 
 ## 分块上传接口
 
@@ -176,6 +183,7 @@ video (3).mp4
 5. 上传完成后调用合并接口。
 6. 服务器合并文件并写入 `media` 数据表。
 7. 重名文件自动追加序号。
+8. 服务器使用 SHA-256 扫描当前专辑，删除后出现且内容完全相同的重复文件。
 
 ## 支持的文件类型
 
@@ -207,8 +215,8 @@ png, jpg, jpeg, gif, webp
 
 ```text
 flask-media-platform/
-├── app.py                     # Flask 主程序、路由和业务逻辑
-├── server_app.py              # 直接启动入口
+├── app.py                     # 完整 Flask 主程序，可直接运行
+├── server_app.py              # 同一应用的备用直接启动入口
 ├── requirements.txt           # Python 依赖
 ├── README.md                  # 英文项目说明
 ├── README.zh.md               # 中文项目说明
@@ -222,7 +230,7 @@ flask-media-platform/
 │   ├── album_form.html        # 创建和编辑专辑
 │   ├── album_detail.html      # 专辑详情和上传区域
 │   ├── user_profile.html      # 用户公开主页
-│   ├── search.html            # 用户搜索页面
+│   ├── search.html            # 用户与专辑实时搜索页面
 │   ├── error.html             # 错误页面
 │   ├── _album_card.html       # 专辑卡片组件
 │   ├── _media_card.html       # 媒体卡片组件
@@ -240,7 +248,7 @@ flask-media-platform/
 ## 下载、安装与启动
 
 ```bash
-git clone https://github.com/wangyifan349/flask-media-platform.git
+git clone https://github.com/你的用户名/flask-media-platform.git
 cd flask-media-platform
 pip install -r requirements.txt
 python server_app.py

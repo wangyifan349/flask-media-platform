@@ -1,24 +1,101 @@
 {% extends 'base.html' %}
-{% block title %}搜索用户 · MediaHub{% endblock %}
+{% block title %}搜索 · MediaHub{% endblock %}
 {% block content %}
-<form class="mb-3" method="get">
+<form id="searchForm" class="mb-3" method="get" action="{{ url_for('search') }}">
     <div class="input-group">
-        <input class="form-control" name="q" value="{{ query }}" placeholder="用户名或显示名称" autofocus>
+        <input id="searchInput" class="form-control" name="q" value="{{ query }}" placeholder="用户名、显示名称或专辑名" autocomplete="off" maxlength="120" autofocus>
         <button class="btn btn-primary" type="submit">搜索</button>
     </div>
 </form>
-{% if query %}
-    {% if users %}
-        <div class="list-group">
-            {% for user in users %}
-                <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" href="{{ url_for('user_profile', username=user['username']) }}">
-                    <span>{{ user['display_name'] }} <small>@{{ user['username'] }}</small></span>
-                    <span class="badge text-bg-light">{{ user['public_album_count'] }}</span>
-                </a>
-            {% endfor %}
-        </div>
-    {% else %}
-        <div class="empty-state">无结果</div>
-    {% endif %}
-{% endif %}
+<div id="searchResultList" class="list-group{% if not results %} d-none{% endif %}">
+    {% for result in results %}
+        <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" href="{{ result['url'] }}">
+            <span>{{ result['primary_text'] }} <small>{{ result['secondary_text'] }}</small></span>
+            <span class="badge text-bg-light">{{ result['badge_text'] }}</span>
+        </a>
+    {% endfor %}
+</div>
+<div id="searchEmptyState" class="empty-state{% if not query or results %} d-none{% endif %}">无结果</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+    // Cache page elements and cancel stale requests during live search.
+    const searchForm = document.getElementById("searchForm");
+    const searchInput = document.getElementById("searchInput");
+    const resultList = document.getElementById("searchResultList");
+    const emptyState = document.getElementById("searchEmptyState");
+    let refreshTimer = null;
+    let activeRequest = null;
+
+    // Build result nodes with textContent to avoid injecting HTML.
+    function createResultItem(result) {
+        const resultLink = document.createElement("a");
+        resultLink.className = "list-group-item list-group-item-action d-flex justify-content-between align-items-center";
+        resultLink.href = result.url;
+
+        const resultText = document.createElement("span");
+        resultText.append(document.createTextNode(`${result.primary_text} `));
+        const secondaryText = document.createElement("small");
+        secondaryText.textContent = result.secondary_text;
+        resultText.append(secondaryText);
+
+        const resultBadge = document.createElement("span");
+        resultBadge.className = "badge text-bg-light";
+        resultBadge.textContent = result.badge_text;
+        resultLink.append(resultText, resultBadge);
+        return resultLink;
+    }
+
+    function renderResults(searchQuery, results) {
+        resultList.replaceChildren(...results.map(createResultItem));
+        resultList.classList.toggle("d-none", results.length === 0);
+        emptyState.classList.toggle("d-none", !searchQuery || results.length > 0);
+    }
+
+    // Refresh results through AJAX and keep the address bar synchronized.
+    async function refreshResults() {
+        const searchQuery = searchInput.value.trim();
+        const browserUrl = new URL(searchForm.action, window.location.origin);
+        if (searchQuery) {
+            browserUrl.searchParams.set("q", searchQuery);
+        }
+        window.history.replaceState(null, "", `${browserUrl.pathname}${browserUrl.search}`);
+        if (!searchQuery) {
+            activeRequest?.abort();
+            renderResults("", []);
+            return;
+        }
+        activeRequest?.abort();
+        activeRequest = new AbortController();
+        const requestUrl = new URL(browserUrl);
+        requestUrl.searchParams.set("format", "json");
+        try {
+            const response = await fetch(requestUrl, {
+                headers: {"X-Requested-With": "XMLHttpRequest"},
+                signal: activeRequest.signal,
+            });
+            if (!response.ok) {
+                throw new Error("Search request failed");
+            }
+            const payload = await response.json();
+            renderResults(payload.query, payload.results || []);
+        } catch (error) {
+            if (error.name !== "AbortError") {
+                renderResults(searchQuery, []);
+            }
+        }
+    }
+
+    searchInput.addEventListener("input", () => {
+        window.clearTimeout(refreshTimer);
+        refreshTimer = window.setTimeout(refreshResults, 220);
+    });
+    searchForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        window.clearTimeout(refreshTimer);
+        refreshResults();
+    });
+})();
+</script>
 {% endblock %}

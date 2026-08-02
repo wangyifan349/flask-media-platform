@@ -1,6 +1,7 @@
 (() => {
     'use strict';
 
+    // ----- Page state and AJAX helper -----
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
     const grid = document.getElementById('albumGrid');
     const emptyState = document.getElementById('albumEmptyState');
@@ -27,6 +28,7 @@
         return data;
     }
 
+    // ----- Album actions -----
     function getCard(target) {
         return target.closest('.album-management-card');
     }
@@ -79,6 +81,7 @@
         }
     });
 
+    // ----- Desktop right-click menu -----
     function hideContextMenu() {
         contextMenu.classList.remove('show');
         contextMenu.setAttribute('aria-hidden', 'true');
